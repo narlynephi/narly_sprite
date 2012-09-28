@@ -43,7 +43,7 @@ def get_frames(img):
 			res.append(layer)
 	return res
 
-def goto_frame(img, frame_num):
+def goto_frame(img, frame_num, layer_pos=0, set_active=True):
 	"""
 	Sets the desired frame folder to be visible and all
 	other frame folders to not be visible.
@@ -51,16 +51,19 @@ def goto_frame(img, frame_num):
 	@returns whether or not it even found the frame you were
 	looking for
 	"""
+
+
 	found_frame = False
 	for frame in get_frames(img):
 		curr_frame_num = get_frame_num(frame)
 		if curr_frame_num == frame_num:
 			frame.visible = True
 			found_frame = True
-			if len(frame.children) > 0:
-				pdb.gimp_image_set_active_layer(img, frame.children[0])
-			else:
-				pdb.gimp_image_set_active_layer(img, frame)
+			if set_active:
+				if len(frame.children) > 0:
+					pdb.gimp_image_set_active_layer(img, frame.children[layer_pos])
+				else:
+					pdb.gimp_image_set_active_layer(img, frame)
 		else:
 			frame.visible = False
 
@@ -85,6 +88,9 @@ def get_last_frame_num(img):
 				max_frame_num = curr_frame_num
 
 	return max_frame_num
+
+def is_frame_root(layer):
+	return pdb.gimp_item_is_group(layer) and layer.parent is None
 
 def get_frame_root(layer):
 	"""
@@ -154,10 +160,15 @@ def narly_sprite_export_flatten(img, layer, reverse, display_image=True):
 
 	if reverse:
 		frames.reverse()
+	
+	pdb.gimp_image_undo_freeze(img)
 
+	curr_frame = get_frame_num(layer)
+
+	curr_count = 0
 	for frame in frames:
 		frame_num = get_frame_num(frame)
-		goto_frame(img, frame_num)
+		goto_frame(img, frame_num, set_active=False)
 		pdb.gimp_edit_copy_visible(img)
 		new_layer = pdb.gimp_layer_new(
 			new_img,
@@ -171,6 +182,18 @@ def narly_sprite_export_flatten(img, layer, reverse, display_image=True):
 		pdb.gimp_image_insert_layer(new_img, new_layer, None, len(new_img.layers))
 		pasted_layer = pdb.gimp_edit_paste(new_layer, 0) # 0 = clear selection in the new image
 		pdb.gimp_floating_sel_anchor(pasted_layer)
+		curr_count += 1
+
+		pdb.gimp_progress_update(float(curr_count) / len(frames))
+	
+	# make the current frame visible again
+	if curr_frame is not None:
+		goto_frame(img, curr_frame)
+
+	# set focus back to the active layer
+	pdb.gimp_image_set_active_layer(img, layer)
+	
+	pdb.gimp_image_undo_thaw(img)
 	
 	return new_img
 
@@ -207,7 +230,9 @@ def narly_sprite_copy_layer_to_all_frames(img, layer):
 
 	pdb.gimp_undo_push_group_start(img)
 
-	for frame in get_frames(img):
+	frames = get_frames(img)
+	curr_count = 0
+	for frame in frames:
 		frame_num = get_frame_num(frame)
 		if frame_num == dont_copy_to:
 			continue
@@ -215,6 +240,9 @@ def narly_sprite_copy_layer_to_all_frames(img, layer):
 		copied_layer.name = layer.name
 		pos_to_insert_at = frame_pos if frame_pos != -1 else len(frame.children)
 		pdb.gimp_image_insert_layer(img, copied_layer, frame, pos_to_insert_at)
+
+		curr_count += 1
+		pdb.gimp_progress_update(float(curr_count) / len(frames))
 	
 	# restore focus back to the original layer
 	pdb.gimp_image_set_active_layer(img, layer)
@@ -251,7 +279,10 @@ def narly_sprite_export_sprite_sheet(img, layer, sheet_type):
 		gimp.Display(new_img)
 		gimp.displays_flush()
 
-		for frame in get_frames(img):
+		pdb.gimp_image_undo_freeze(img)
+		frames = get_frames(img)
+		curr_count = 0
+		for frame in frames:
 			frame_num = get_frame_num(frame)
 			goto_frame(img, frame_num)
 			pdb.gimp_edit_copy_visible(img)
@@ -269,6 +300,11 @@ def narly_sprite_export_sprite_sheet(img, layer, sheet_type):
 			pdb.gimp_floating_sel_anchor(pasted_layer)
 
 			pdb.gimp_layer_set_offsets(new_layer, frame_num*img.width, 0)
+
+			curr_count += 1
+			pdb.gimp_progress_update(float(curr_count)/len(frames))
+
+		pdb.gimp_image_undo_thaw(img)
 	
 	elif sheet_type == GRID:
 		# determine the total number of rows and columns in the sprite sheet
@@ -305,7 +341,10 @@ def narly_sprite_export_sprite_sheet(img, layer, sheet_type):
 		gimp.Display(new_img)
 		gimp.displays_flush()
 
-		for frame in get_frames(img):
+		pdb.gimp_image_undo_freeze(img)
+		frames = get_frames(img)
+		curr_count = 0
+		for frame in frames:
 			frame_num = get_frame_num(frame)
 
 			goto_frame(img, frame_num)
@@ -326,6 +365,21 @@ def narly_sprite_export_sprite_sheet(img, layer, sheet_type):
 			frame_col = frame_num % num_cols
 			frame_row = int((frame_num - frame_col) / num_cols)
 			pdb.gimp_layer_set_offsets(new_layer, frame_col*img.width, frame_row*img.height)
+
+			curr_count += 1
+			pdb.gimp_progress_update(float(curr_count)/len(frames))
+
+		pdb.gimp_image_undo_thaw(img)
+	
+	# if we were in a valid frame, make that frame visible again
+	curr_frame_num = get_frame_num(layer)
+	if curr_frame_num is not None:
+		pdb.gimp_image_undo_freeze(img)
+		goto_frame(img, curr_frame_num)
+		pdb.gimp_image_undo_thaw(img)
+
+	# make the current layer the active layer again
+	pdb.gimp_image_set_active_layer(img, layer)
 
 register(
 	"python_fu_narly_sprite_export_sprite_sheet",	# unique name for plugin
@@ -456,13 +510,19 @@ def narly_sprite_delete_frame(img, layer):
 	if curr_frame_num is None:
 		return
 	
+	curr_frame_pos = 0
+	if not is_frame_root(layer):
+		curr_frame_pos = pdb.gimp_image_get_layer_position(img, layer)
+	
 	pdb.gimp_undo_push_group_start(img)
 
 	frame_root = get_frame_root(layer)
 	pdb.gimp_image_remove_layer(img, frame_root)
 	shift_frames_up(img, curr_frame_num+1)
-	if not goto_frame(img, curr_frame_num):
-		goto_frame(img, curr_frame_num-1)
+	pdb.gimp_image_undo_freeze(img)
+	if not goto_frame(img, curr_frame_num, curr_frame_pos):
+		goto_frame(img, curr_frame_num-1, curr_frame_pos)
+	pdb.gimp_image_undo_thaw(img)
 
 	pdb.gimp_undo_push_group_end(img)
 
@@ -473,7 +533,7 @@ register(
 	COPYRIGHT1,
 	COPYRIGHT2,
 	COPYRIGHT_YEAR,	# copyright year
-	"<Image>/Sprite/Frames/Delete",	# what to call it in the menu
+	"<Image>/Sprite/Frames/Delete Frame",	# what to call it in the menu
 	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
 	[],	# input params,
 	[],	# output params,
@@ -511,7 +571,11 @@ def narly_sprite_new_frame(img, layer):
 			copied_layer.name = frame_layer.name
 			pdb.gimp_image_insert_layer(img, copied_layer, new_frame_root, len(new_frame_root.children))
 
-		goto_frame(img, curr_frame_num+1)
+		curr_pos_in_frame = 0
+		if not is_frame_root(layer):
+			curr_pos_in_frame = pdb.gimp_image_get_layer_position(img, layer)
+
+		goto_frame(img, curr_frame_num+1, curr_pos_in_frame)
 
 		pdb.gimp_undo_push_group_end(img)
 
@@ -539,7 +603,9 @@ def narly_sprite_new_frame(img, layer):
 	)
 	pdb.gimp_image_insert_layer(img, blank_layer, new_frame_root, 0)
 
+	pdb.gimp_image_undo_freeze(img)
 	goto_frame(img, last_frame_num+1)
+	pdb.gimp_image_undo_thaw(img)
 
 	pdb.gimp_undo_push_group_end(img)
 
@@ -550,7 +616,7 @@ register(
 	COPYRIGHT1,
 	COPYRIGHT2,
 	COPYRIGHT_YEAR,	# copyright year
-	"<Image>/Sprite/Frames/New",	# what to call it in the menu
+	"<Image>/Sprite/Frames/New Frame",	# what to call it in the menu
 	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
 	[],	# input params,
 	[],	# output params,
@@ -624,12 +690,17 @@ def get_min_max_coords(layer):
 	return (min_x, min_y, max_x, max_y)
 
 def narly_sprite_trim(img, layer):
+	pdb.gimp_undo_push_group_start(img)
+	
 	min_x = img.width-1
 	min_y = img.height-1
 	max_x = 0
 	max_y = 0
 
-	for frame in get_frames(img):
+	frames = get_frames(img)
+
+	curr_count = 0
+	for frame in frames:
 		fminx,fminy,fmaxx,fmaxy = get_min_max_coords(frame)
 		if fminx < min_x:
 			min_x = fminx
@@ -640,7 +711,13 @@ def narly_sprite_trim(img, layer):
 		if fmaxy > max_y:
 			max_y = fmaxy
 
+		curr_count += 1
+
+		pdb.gimp_progress_update(float(curr_count)/ len(frames))
+
 	pdb.gimp_image_crop(img, max_x - min_x+1, max_y - min_y+1, min_x, min_y)
+
+	pdb.gimp_undo_push_group_end(img)
 
 register(
 	"python_fu_narly_sprite_trim",	# unique name for plugin
@@ -649,7 +726,7 @@ register(
 	COPYRIGHT1,
 	COPYRIGHT2,
 	COPYRIGHT_YEAR,	# copyright year
-	"<Image>/Sprite/Tools/Trim",	# what to call it in the menu
+	"<Image>/Sprite/Tools/Trim Sprite",	# what to call it in the menu
 	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
 	[],	# input params,
 	[],	# output params,
@@ -668,7 +745,13 @@ def narly_sprite_prev_frame(img, layer):
 	if curr_frame_num <= 0:
 		return
 	
-	goto_frame(img, curr_frame_num-1)
+	curr_pos_in_frame = 0
+	if not is_frame_root(layer):
+		curr_pos_in_frame = pdb.gimp_image_get_layer_position(img, layer)
+
+	pdb.gimp_image_undo_freeze(img)
+	goto_frame(img, curr_frame_num-1, curr_pos_in_frame)
+	pdb.gimp_image_undo_thaw(img)
 
 register(
 	"python_fu_narly_sprite_prev_frame",	# unique name for plugin
@@ -677,7 +760,7 @@ register(
 	COPYRIGHT1,
 	COPYRIGHT2,
 	COPYRIGHT_YEAR,	# copyright year
-	"<Image>/Sprite/Frames/Prev",	# what to call it in the menu
+	"<Image>/Sprite/Frames/Prev Frame",	# what to call it in the menu
 	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
 	[],	# input params,
 	[],	# output params,
@@ -698,7 +781,13 @@ def narly_sprite_next_frame(img, layer):
 	if curr_frame_num >= last_frame_num:
 		return
 	
-	goto_frame(img, curr_frame_num+1)
+	curr_pos_in_frame = 0
+	if not is_frame_root(layer):
+		curr_pos_in_frame = pdb.gimp_image_get_layer_position(img, layer)
+	
+	pdb.gimp_image_undo_freeze(img)
+	goto_frame(img, curr_frame_num+1, curr_pos_in_frame)
+	pdb.gimp_image_undo_thaw(img)
 
 register(
 	"python_fu_narly_sprite_next_frame",	# unique name for plugin
@@ -707,7 +796,7 @@ register(
 	COPYRIGHT1,
 	COPYRIGHT2,
 	COPYRIGHT_YEAR,	# copyright year
-	"<Image>/Sprite/Frames/Next",	# what to call it in the menu
+	"<Image>/Sprite/Frames/Next Frame",	# what to call it in the menu
 	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
 	[],	# input params,
 	[],	# output params,
@@ -733,7 +822,7 @@ register(
 	COPYRIGHT1,
 	COPYRIGHT2,
 	COPYRIGHT_YEAR,	# copyright year
-	"Sprite",	# what to call it in the menu
+	"New Sprite",	# what to call it in the menu
 	"",	# used when creating a new image (blank), else, use "*"
 	[
 		(PF_INT16, "width", "Width for the sprite", 64),
