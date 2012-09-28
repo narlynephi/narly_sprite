@@ -143,10 +143,12 @@ def get_layers_in_frame(img, frame_num):
 # -----------------------------------------------
 # -----------------------------------------------
 
-def narly_sprite_export_flatten(img, layer, reverse):
+def narly_sprite_export_flatten(img, layer, reverse, display_image=True):
 	new_img = gimp.Image(img.width, img.height, img.base_type)
-	gimp.Display(new_img)
-	gimp.displays_flush()
+
+	if display_image:
+		gimp.Display(new_img)
+		gimp.displays_flush()
 
 	frames = get_frames(img)
 
@@ -351,8 +353,11 @@ register(
 # -----------------------------------------------
 
 def narly_sprite_play_animation(img, layer):
-	pdb.gimp_undo_push_group_start(img)
-	pdb.gimp_undo_push_group_end(img)
+	return
+	# last_frame_num = get_last_frame_num(img)
+# 
+	# anim_window = AnimationWindow(img)
+	# gtk.main()
 
 register(
 	"python_fu_narly_sprite_play_animation",	# unique name for plugin
@@ -368,6 +373,79 @@ register(
 	narly_sprite_play_animation	# actual function
 )
 
+# from gobject import timeout_add
+# 
+# class AnimationWindow(gtk.Window):
+	# def __init__ (self, img, *args):
+		# self.img = img
+		# self._currFrameNum = 0
+		# self._frameDelay = 100
+# 
+		# # Create the dialog
+		# win = gtk.Window.__init__(self, *args)
+# 
+		# # Obey the window manager quit signal:
+		# self.connect("destroy", gtk.main_quit)
+# 
+		# # Make the UI
+		# self.set_border_width(10)
+		# vbox = gtk.VBox(spacing=10, homogeneous=False)
+		# self.add(vbox)
+		# label = gtk.Label("Narly Sprite Animator")
+		# vbox.add(label)
+		# label.show()
+# 
+		# table = gtk.Table(rows=2, columns=2, homogeneous=False)
+		# table.set_col_spacings(10)
+		# vbox.add(table)
+# 
+		# # Delay Changer
+		# label = gtk.Label("Delay")
+		# label.set_alignment(xalign=0.0, yalign=1.0)
+		# table.attach(label, 0, 1, 0, 1, xoptions=gtk.FILL, yoptions=0)
+		# label.show()
+		# delay_adj = gtk.Adjustment(value=100, lower=0, upper=5000, step_incr=10)
+		# delay_adj.connect("value_changed", self.delay_changed_cb)
+		# delay_input = gtk.SpinButton(delay_adj, climb_rate=10, digits=0)
+		# table.attach(delay_input, 1, 2, 0, 1)
+		# delay_input.show()
+# 
+		# table.show()
+# 
+		# hbox = gtk.HBox(spacing=20)
+		# play_btn = gtk.Button(stock=gtk.STOCK_MEDIA_PLAY)
+		# play_btn.set_use_stock(True)
+		# hbox.add(play_btn)
+		# play_btn.connect("clicked", self.play_animation)
+		# play_btn.show()
+# 
+		# vbox.add(hbox)
+		# hbox.show()
+# 
+		# # Make the dialog button box
+		# hbox = gtk.HBox(spacing=20)
+# 
+		# btn = gtk.Button("Close")
+		# hbox.add(btn)
+		# btn.show()
+		# btn.connect("clicked", gtk.main_quit)
+# 
+		# vbox.add(hbox)
+		# hbox.show()
+		# vbox.show()
+		# self.show()
+# 
+		# timeout_add(300, self.update, self)	
+		# return win
+# 
+	# def play_animation(self):
+		# pass
+# 
+	# def delay_changed_cb(self, val):
+		# self._frameDelay = val
+# 
+	# def update(self, *args):
+		# pdb.gimp_displays_flush()
 
 # -----------------------------------------------
 # -----------------------------------------------
@@ -478,6 +556,104 @@ register(
 	[],	# output params,
 	narly_sprite_new_frame	# actual function
 	#menu="<Image>/Sprite/Frames"
+)
+
+# -----------------------------------------------
+# -----------------------------------------------
+# -----------------------------------------------
+
+def get_min_max_coords(layer):
+	layer_offsets = layer.offsets
+	offset_x = layer_offsets[0]
+	offset_y = layer_offsets[1]
+	min_x = layer.width
+	min_y = layer.height
+	max_x = 0
+	max_y = 0
+
+	curr_x = 0
+	curr_y = 0
+	while curr_y < layer.height:
+		curr_x = 0
+		found_pixel = False
+		# find the first pixel from the left
+		while curr_x < min_x:
+			pixel_val = layer.get_pixel(curr_x, curr_y)
+			# found our first pixel from the left
+			if pixel_val[3] != 0:
+				min_x = curr_x
+				found_pixel = True
+				break
+			curr_x += 1
+
+		curr_x = layer.width-1
+		# now go from right to left until we find our first pixel
+		while curr_x > max_x:
+			pixel_val = layer.get_pixel(curr_x, curr_y)
+			# found our first pixel from the left that isn't alpha=0
+			if pixel_val[3] != 0:
+				max_x = curr_x
+				found_pixel = True
+				break
+			curr_x -= 1
+
+		if found_pixel:
+			if curr_y < min_y:
+				min_y = curr_y
+
+			if curr_y > max_y:
+				max_y = curr_y
+
+		curr_y += 1
+	
+	curr_x = min_x
+	while curr_x < max_x:
+		curr_y = layer.height-1
+		# now go from right to left until we find our first pixel
+		while curr_y > max_y:
+			pixel_val = layer.get_pixel(curr_x, curr_y)
+			# found our first pixel from the left that isn't alpha=0
+			if pixel_val[3] != 0:
+				max_y = curr_y
+				found_pixel = True
+				break
+			curr_y -= 1
+
+		curr_x += 1
+	
+	return (min_x, min_y, max_x, max_y)
+
+def narly_sprite_trim(img, layer):
+	min_x = img.width-1
+	min_y = img.height-1
+	max_x = 0
+	max_y = 0
+
+	for frame in get_frames(img):
+		fminx,fminy,fmaxx,fmaxy = get_min_max_coords(frame)
+		if fminx < min_x:
+			min_x = fminx
+		if fminy < min_y:
+			min_y = fminy
+		if fmaxx > max_x:
+			max_x = fmaxx
+		if fmaxy > max_y:
+			max_y = fmaxy
+
+	pdb.gimp_image_crop(img, max_x - min_x+1, max_y - min_y+1, min_x, min_y)
+
+register(
+	"python_fu_narly_sprite_trim",	# unique name for plugin
+	"Narly Sprite Trim",		# short name
+	"Narly Sprite Trim",	# long name
+	COPYRIGHT1,
+	COPYRIGHT2,
+	COPYRIGHT_YEAR,	# copyright year
+	"<Image>/Sprite/Tools/Trim",	# what to call it in the menu
+	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
+	[],	# input params,
+	[],	# output params,
+	narly_sprite_trim	# actual function
 )
 
 # -----------------------------------------------
