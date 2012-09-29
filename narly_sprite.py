@@ -3,6 +3,7 @@
 from gimpfu import *
 import re
 import math
+import json
 
 COPYRIGHT1 = "Nephi Johnson"
 COPYRIGHT2 = "Nephi Johnson"
@@ -22,6 +23,52 @@ def _shift_frames_helper(img, start_frame_num, delta):
 	for frame in get_frames(img):
 		frame.name = frame.name.replace(" SHIFTTMP", "")
 
+def copy_layer_no_data(img, layer):
+	res = pdb.gimp_layer_new(
+		img,
+		layer.width,
+		layer.height,
+		layer.type,
+		layer.name,
+		100,		# opacity
+		NORMAL_MODE
+	)
+	return res
+
+narly_sprite_default_config = {
+	"new_frame_copy_image_data": False,
+
+	"always_show_prev_frame": False,
+	"show_prev_frame_on_new": True,
+	"prev_frame_alpha": 30.0,
+}
+def get_config_parasite(img):
+	p = img.parasite_find("narly_sprite_config")
+	if p is None:
+		p = gimp.Parasite(
+			"narly_sprite_config",
+			1,	# 1 = Persistent
+			json.dumps(narly_sprite_default_config)
+		)
+		img.parasite_attach(p)
+	return p
+
+def get_config(img):
+	p = get_config_parasite(img)
+	config = json.loads(p.data)
+	return config
+
+# TODO: this doesn't work, fix it!
+def save_config(img, config):
+	get_config_parasite(img)
+	img.parasite_detach("narly_sprite_config")
+	new_parasite = gimp.Parasite(
+		"narly_sprite_config",
+		1,	# 1 = Persistent
+		json.dumps(config)
+	)
+	img.parasite_attach(new_parasite)
+
 def shift_frames_up(img, start_frame_num):
 	"""
 	Shift frames "up" - number-wise a frame would go from
@@ -36,12 +83,28 @@ def shift_frames_down(img, start_frame_num):
 	"""
 	_shift_frames_helper(img, start_frame_num, 1)
 
+def get_frame_by_number(img, num):
+	for frame in get_frames(img):
+		if get_frame_num(frame) == num:
+			return frame
+	return None
+
 def get_frames(img):
 	res = []
 	for layer in img.layers:
 		if get_frame_num(layer) is not None:
 			res.append(layer)
 	return res
+
+def make_frame_visible(img, frame_num, opacity=100.0):
+	frames = get_frames(img)
+	for frame in frames:
+		curr_frame_num = get_frame_num(frame)
+		if curr_frame_num == frame_num:
+			pdb.gimp_image_undo_freeze(img)
+			frame.opacity = opacity
+			frame.visible = True
+			pdb.gimp_image_undo_thaw(img)
 
 def goto_frame(img, frame_num, layer_pos=0, set_active=True):
 	"""
@@ -52,10 +115,13 @@ def goto_frame(img, frame_num, layer_pos=0, set_active=True):
 	looking for
 	"""
 
+	last_frame = get_last_frame_num(img)
+	frame_num = frame_num % (last_frame+1)
 
 	found_frame = False
 	for frame in get_frames(img):
 		curr_frame_num = get_frame_num(frame)
+		frame.opacity = 100.0
 		if curr_frame_num == frame_num:
 			frame.visible = True
 			found_frame = True
@@ -545,39 +611,58 @@ register(
 # -----------------------------------------------
 
 def narly_sprite_new_frame(img, layer):
+	last_frame_num = get_last_frame_num(img)
+	curr_frame_num = get_frame_num(layer)
+	if curr_frame_num == -1:
+		frame_num_to_copy = last_frame_num
+	else:
+		frame_num_to_copy = curr_frame_num
+	
+	config = get_config(img)
+
 	# means that we're currently in a valid frame, so
 	# insert a new frame after this one, copying all the layers
 	# and shifting all the subsequent frames down
-	if layer is not None and get_frame_num(layer) is not None:
+	if frame_num_to_copy is not None:
 		pdb.gimp_undo_push_group_start(img)
 
-		curr_frame_num = get_frame_num(layer)
-		frame_root = get_frame_root(layer)
+		frame_root = get_frame_by_number(img, frame_num_to_copy)
 		curr_frame_position = pdb.gimp_image_get_layer_position(img, frame_root)
+
+		new_frame_num = frame_num_to_copy+1
+		new_frame_pos = curr_frame_position+1
 
 		# shift down any frames after the current one so we leave an
 		# opening for the new frame
-		shift_frames_down(img, curr_frame_num+1)
+		shift_frames_down(img, new_frame_num)
 
 		# make the new frame's folder and add it to the image
 		new_frame_root = pdb.gimp_layer_group_new(img)
-		new_frame_root.name = make_frame_name(curr_frame_num+1)
-		pdb.gimp_image_insert_layer(img, new_frame_root, None, curr_frame_position+1)
+		new_frame_root.name = make_frame_name(new_frame_num)
+		pdb.gimp_image_insert_layer(img, new_frame_root, None, new_frame_pos)
 
 		# copy any layers in the current frame to the
 		# new frame
 		for frame_layer in frame_root.children:
-			copied_layer = frame_layer.copy()
-			copied_layer.name = frame_layer.name
-			pdb.gimp_image_insert_layer(img, copied_layer, new_frame_root, len(new_frame_root.children))
+			new_layer = None
+			if config["new_frame_copy_image_data"]:
+				new_layer = frame_layer.copy()
+				new_layer.name = frame_layer.name
+			else:
+				new_layer = copy_layer_no_data(img, frame_layer)
+			pdb.gimp_image_insert_layer(img, new_layer, new_frame_root, len(new_frame_root.children))
 
 		curr_pos_in_frame = 0
-		if not is_frame_root(layer):
+		if not is_frame_root(layer) and curr_frame_num is not None:
 			curr_pos_in_frame = pdb.gimp_image_get_layer_position(img, layer)
 
-		goto_frame(img, curr_frame_num+1, curr_pos_in_frame)
+		goto_frame(img, new_frame_num, curr_pos_in_frame)
 
 		pdb.gimp_undo_push_group_end(img)
+
+		if config["always_show_prev_frame"] or config["show_prev_frame_on_new"]:
+			frame_root.opacity = config["prev_frame_alpha"]
+			frame_root.visible = True
 
 		return
 	
@@ -742,7 +827,8 @@ def narly_sprite_prev_frame(img, layer):
 	if curr_frame_num is None:
 		return
 	
-	if curr_frame_num <= 0:
+	# don't know what's happening here
+	if curr_frame_num < 0:
 		return
 	
 	curr_pos_in_frame = 0
@@ -752,6 +838,10 @@ def narly_sprite_prev_frame(img, layer):
 	pdb.gimp_image_undo_freeze(img)
 	goto_frame(img, curr_frame_num-1, curr_pos_in_frame)
 	pdb.gimp_image_undo_thaw(img)
+
+	config = get_config(img)
+	if curr_frame_num > 2 and config["always_show_prev_frame"]:
+		make_frame_visible(img, curr_frame_num-2, config["prev_frame_alpha"])
 
 register(
 	"python_fu_narly_sprite_prev_frame",	# unique name for plugin
@@ -778,7 +868,8 @@ def narly_sprite_next_frame(img, layer):
 	
 	last_frame_num = get_last_frame_num(img)
 
-	if curr_frame_num >= last_frame_num:
+	# don't know what the heck is going on here
+	if curr_frame_num > last_frame_num:
 		return
 	
 	curr_pos_in_frame = 0
@@ -788,6 +879,10 @@ def narly_sprite_next_frame(img, layer):
 	pdb.gimp_image_undo_freeze(img)
 	goto_frame(img, curr_frame_num+1, curr_pos_in_frame)
 	pdb.gimp_image_undo_thaw(img)
+
+	config = get_config(img)
+	if config["always_show_prev_frame"]:
+		make_frame_visible(img, curr_frame_num, config["prev_frame_alpha"])
 
 register(
 	"python_fu_narly_sprite_next_frame",	# unique name for plugin
@@ -802,6 +897,126 @@ register(
 	[],	# output params,
 	narly_sprite_next_frame	# actual function
 )
+
+# -----------------------------------------------
+# -----------------------------------------------
+# -----------------------------------------------
+
+def narly_sprite_settings(img, layer):
+	import gtk
+	class NarlySettingsDialog(gtk.Window):
+		def __init__(self, img, *args):
+			self.img = img
+			self.config = get_config(img)
+
+			win = gtk.Window.__init__(self, *args)
+			self.connect("destroy", gtk.main_quit)
+			self.set_border_width(10)
+
+			# add the main vbox and the title label
+			vbox = gtk.VBox(spacing=10, homogeneous=False)
+			self.add(vbox)
+			label = gtk.Label("Narly Sprite Settings")
+			vbox.add(label)
+			label.show()
+
+			# for new_frame_copy_image_data
+			new_frame_copy = gtk.CheckButton("Copy Pixels to New Frame")
+			new_frame_copy.set_active(self.config["new_frame_copy_image_data"])
+			new_frame_copy.connect("toggled", self.new_frame_copy_toggled, new_frame_copy)
+			vbox.add(new_frame_copy)
+			new_frame_copy.show()
+
+			sep = gtk.HSeparator()
+			vbox.add(sep)
+			sep.show()
+
+			# for new_frame_copy_image_data
+			always_show_prev_frame = gtk.CheckButton("Always Show Prev Frame")
+			always_show_prev_frame.set_active(self.config["always_show_prev_frame"])
+			always_show_prev_frame.connect("toggled", self.always_show_prev_frame_toggled, always_show_prev_frame)
+			vbox.add(always_show_prev_frame)
+			always_show_prev_frame.show()
+
+			show_prev_frame_on_new = gtk.CheckButton("Show Prev Frame on New")
+			show_prev_frame_on_new.set_active(self.config["show_prev_frame_on_new"])
+			show_prev_frame_on_new.connect("toggled", self.show_prev_frame_on_new_toggled, show_prev_frame_on_new)
+			vbox.add(show_prev_frame_on_new)
+			show_prev_frame_on_new.show()
+
+			hbox = gtk.HBox()
+			label = gtk.Label("Prev Frame Alpha")
+			hbox.add(label)
+			label.show()
+			adj = gtk.Adjustment(
+				value=self.config["prev_frame_alpha"],
+				lower=0.0,
+				upper=100.0,
+				step_incr=1.0,
+				page_incr=10.0,
+			)
+			prev_frame_alpha = gtk.SpinButton(adjustment=adj, climb_rate=0.5, digits=2)
+			adj.connect("value_changed", self.prev_frame_alpha_changed, prev_frame_alpha)
+			hbox.add(prev_frame_alpha)
+			prev_frame_alpha.show()
+			vbox.add(hbox)
+			hbox.show()
+
+			# for always_show_prev_frame
+
+			# for show_prev_frame_on_new
+
+			# for prev_frame_alpha
+
+			# add the exit buttons
+			hbox = gtk.HBox(spacing=20)
+			close_btn = gtk.Button("OK")
+			hbox.add(close_btn)
+			close_btn.show()
+			close_btn.connect("clicked", self.ok_btn_clicked)
+			vbox.add(hbox)
+			hbox.show()
+			vbox.show()
+
+			self.show()
+
+		def prev_frame_alpha_changed(self, widget, spin_btn):
+			self.config["prev_frame_alpha"] = spin_btn.get_value()
+			save_config(self.img, self.config)
+
+		def show_prev_frame_on_new_toggled(self, widget, check_btn):
+			self.config["show_prev_frame_on_new"] = not not widget.get_active()
+			save_config(self.img, self.config)
+
+		def always_show_prev_frame_toggled(self, widget, check_btn):
+			self.config["always_show_prev_frame"] = not not widget.get_active()
+			save_config(self.img, self.config)
+
+		def new_frame_copy_toggled(self, widget, check_btn):
+			self.config["new_frame_copy_image_data"] = not not widget.get_active()
+			save_config(self.img, self.config)
+
+		def ok_btn_clicked(self, *args):
+			save_config(self.img, self.config)
+			gtk.main_quit()
+	
+	settings_dialog = NarlySettingsDialog(img)
+	gtk.main()
+
+register(
+	"python_fu_narly_sprite_settings",	# unique name for plugin
+	"Narly Sprite Settings",		# short name
+	"Narly Sprite Settings",	# long name
+	COPYRIGHT1,
+	COPYRIGHT2,
+	COPYRIGHT_YEAR,	# copyright year
+	"<Image>/Sprite/Narly Settings",	# what to call it in the menu
+	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
+	[],	# input params,
+	[],	# output params,
+	narly_sprite_settings	# actual function
+)
+	
 
 # -----------------------------------------------
 # -----------------------------------------------
