@@ -116,6 +116,10 @@ def goto_frame(img, frame_num, layer_pos=0, set_active=True):
 	"""
 
 	last_frame = get_last_frame_num(img)
+	# means there's no frames left in the img
+	if last_frame == -1:
+		return
+
 	frame_num = frame_num % (last_frame+1)
 
 	found_frame = False
