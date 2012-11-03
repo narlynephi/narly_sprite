@@ -287,6 +287,63 @@ register(
 # -----------------------------------------------
 # -----------------------------------------------
 
+def narly_sprite_toggle_visibility_all_current_layer(img, layer):
+	"""
+	Hides or shows the current layer in all frames.
+	"""
+	this_frame_num = get_frame_num(layer)
+
+	# can't perform this operation if a frame layer isn't currently selected
+	# (reading minds will be implemented in v 9.0)
+	if this_frame_num is None:
+		return
+	
+	# a frame layer needs to be selected, not the frame folder layer
+	if is_frame_root(layer):
+		return
+
+	# don't store these actions in the undo history
+	pdb.gimp_image_undo_freeze(img)
+
+	frame_pos = pdb.gimp_image_get_layer_position(img, layer)
+
+	# toggle the visibility - this is what we'll set all of the other
+	# frames to as well
+	layer.visible = not layer.visible
+
+	frames = get_frames(img)
+	for frame in frames:
+		curr_frame_num = get_frame_num(frame)
+		# sanity check - make sure that there's enough frame layers in this frame
+		if len(frame.children) >= frame_pos:
+			frame.children[frame_pos].visible = layer.visible
+
+	# make sure we keep the currently selected layer the active one (not sure if
+	# toggling the visibility on other layers changes that)
+	pdb.gimp_image_set_active_layer(img, layer)
+
+	# resume normal undo recording
+	pdb.gimp_image_undo_thaw(img)
+
+register(
+	"python_fu_narly_sprite_toggle_visibility_all_current_layer",	# unique name for plugin
+	"Narly Sprite Toggle Frame Layer Visibility",	# short name
+	"Narly Sprite Toggle Frame Layer Visibility",	# long name
+	COPYRIGHT1,
+	COPYRIGHT2,
+	COPYRIGHT_YEAR,	# copyright year
+	"<Image>/Sprite/Frames/Toggle Visibility",	# what to call it in the menu
+	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
+	[
+	],	# input params,
+	[],	# output params,
+	narly_sprite_toggle_visibility_all_current_layer	# actual function
+)
+
+# -----------------------------------------------
+# -----------------------------------------------
+# -----------------------------------------------
+
 def narly_sprite_copy_layer_to_all_frames(img, layer):
 	"""
 	Copies the current layer to all frames. If the current layer is in a
