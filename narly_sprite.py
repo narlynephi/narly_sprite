@@ -344,6 +344,198 @@ register(
 # -----------------------------------------------
 # -----------------------------------------------
 
+INSERT = 0
+APPEND = 1
+def narly_sprite_duplicate_frames(img, layer, start_frame, end_frame, new_frames_insert_method):
+	"""
+	Duplicate frames in the range [start_frame, end_frame] (inclusive of both start and end),
+	optionally appending the frames to the end of the frames list instead of inserting
+	after the end_frame.
+
+	A negative value for end_frame indicates that ALL frames after the start frame are to be
+	duplicated
+	"""
+	if start_frame > end_frame and end_frame >= 0:
+		gimp.message("Start frame must be <= end frame!")
+		return
+	elif start_frame < 0:
+		gimp.message("Start frame value must be >= 0!")
+		return
+	elif end_frame > get_last_frame_num(img):
+		gimp.message("End frame number exceeds current frames!")
+	
+	if end_frame < 0:
+		end_frame = get_last_frame_num(img)
+	
+	end_frame_layer = get_frame_by_number(img, end_frame)
+	dest_frame_idx = 0
+	dest_frame_pos = 0
+	if new_frames_insert_method == INSERT:
+		dest_frame_idx = end_frame + 1
+		dest_frame_pos = pdb.gimp_image_get_layer_position(img, end_frame_layer) + 1
+	elif new_frames_insert_method == APPEND:
+		dest_frame_idx = get_last_frame_num(img) + 1
+		dest_frame_pos = get_last_frame_position(img) + 1
+	else:
+		gimp.message("ERROR! Could not determine destination frame idx!")
+		return
+
+	pdb.gimp_undo_push_group_start(img)
+
+	curr_frame_idx = start_frame
+	while curr_frame_idx <= end_frame:
+		print "CURR_FRAME_IDX: %d, END_FRAME: %d" % (curr_frame_idx, end_frame)
+		frame = get_frame_by_number(img, curr_frame_idx)
+
+		shift_frames_down(img, dest_frame_idx)
+
+		new_frame_root = pdb.gimp_layer_group_new(img)
+		new_frame_root.name = make_frame_name(dest_frame_idx)
+		pdb.gimp_image_insert_layer(img, new_frame_root, None, dest_frame_pos)
+
+		for child_layer in frame.children:
+			new_layer = child_layer.copy()
+			new_layer.name = child_layer.name
+			pdb.gimp_image_insert_layer(img, new_layer, new_frame_root, len(new_frame_root.children))
+
+		dest_frame_pos += 1
+		dest_frame_idx += 1
+		curr_frame_idx += 1
+
+		# pdb.gimp_progress_update(float(...)/len(...))
+
+	pdb.gimp_undo_push_group_end(img)
+
+register(
+	"python_fu_narly_sprite_duplicate_frames",	# unique name for plugin
+	"Narly Sprite Duplicate Frames",		# short name
+	"Narly Sprite Duplicate Frames",	# long name
+	COPYRIGHT1,
+	COPYRIGHT2,
+	COPYRIGHT_YEAR,	# copyright year
+	"<Image>/Sprite/Tools/Duplicate Frames",	# what to call it in the menu
+	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
+	[
+		(PF_INT16, "start_frame", "Start Frame", 0),
+		(PF_INT16, "end_frame", "End Frame", -1),
+		(PF_RADIO, "new_frames_insert_method", "New Frames Location", True,
+			(
+				("Insert After End Frame", INSERT),
+				("Append After All Frames", APPEND),
+			)
+		),
+	],	# input params,
+	[],	# output params,
+	narly_sprite_duplicate_frames	# actual function
+)
+
+# -----------------------------------------------
+# -----------------------------------------------
+# -----------------------------------------------
+
+def narly_sprite_complete_circular_animation(img, layer, horizontal_flip, vertical_flip, include_first):
+	"""
+	Completes the rest of the circular animation by creating new frames
+	from the previous frames in reverse order. Options specify whether
+	the frames should be flipped horizontally, vertically, or both. Should
+	also have an option to include the first frame or not
+
+	Eg (if flip horizontally is selected, and include first frame is not
+	selected):
+
+	Frame 0
+	Frame 1
+	Frame 2
+	Frame 3
+	Frame 4
+	Frame 5 (Frame 3 flipped horizontally)
+	Frame 6 (Frame 2 flipped horizontally)
+	Frame 7 (Frame 1 flipped horizontally)
+	"""
+	last_frame_num = get_last_frame_num(img)
+	last_frame_pos = get_last_frame_position(img)
+	frame_counts = 0
+
+	pdb.gimp_undo_push_group_start(img)
+
+	# iterate the frames IN REVERSE ORDER
+	for idx in xrange(last_frame_num, -1, -1):
+		if idx == 0 and not include_first:
+			continue
+		# don't repeat the middle frame
+		if idx == last_frame_num:
+			continue
+
+		frame = get_frame_by_number(img, idx)
+		frame_counts += 1
+
+		new_frame_root = pdb.gimp_layer_group_new(img)
+		new_frame_root.name = make_frame_name(last_frame_num + frame_counts)
+		pdb.gimp_image_insert_layer(img, new_frame_root, None, last_frame_pos + frame_counts)
+
+		for frame_layer in frame.children:
+			new_layer = frame_layer.copy()
+			new_layer.name = frame_layer.name
+			pdb.gimp_image_insert_layer(img, new_layer, new_frame_root, len(new_frame_root.children))
+
+			continue
+			print str(horizontal_flip)
+			if horizontal_flip:
+				pdb.gimp_item_transform_flip_simple(
+					new_layer,
+					0, # horizontal
+					True, # automatically center it in the middle
+					0 # FLOAT coord of flip axis
+				)
+			
+			if vertical_flip:
+				pdb.gimp_item_transform_flip_simple(
+					new_layer,
+					1, # vertical
+					True, # automatically center it in the middle
+					0 # FLOAT coord of flip axis
+				)
+
+		if horizontal_flip:
+			pdb.gimp_item_transform_flip_simple(
+				new_frame_root,
+				0, # horizontal
+				True, # automatically center it in the middle
+				0 # FLOAT coord of flip axis
+			)
+
+		if vertical_flip:
+			pdb.gimp_item_transform_flip_simple(
+				new_frame_root,
+				1, # vertical
+				True, # automatically center it in the middle
+				0 # FLOAT coord of flip axis
+			)
+
+	pdb.gimp_undo_push_group_end(img)
+
+register(
+	"python_fu_narly_sprite_complete_circular_animation",	# unique name for plugin
+	"Narly Sprite Complete Circular Animation",		# short name
+	"Narly Sprite Complete Circular Animation",	# long name
+	COPYRIGHT1,
+	COPYRIGHT2,
+	COPYRIGHT_YEAR,	# copyright year
+	"<Image>/Sprite/Tools/Complete Circ Anim",	# what to call it in the menu
+	"*",	# used when creating a new image (blank), else, use "*" for all existing image types
+	[
+		(PF_TOGGLE, "horizontal_flip", "Flip Horizontal", True),
+		(PF_TOGGLE, "vertical_flip", "Flip Vertical", False),
+		(PF_TOGGLE, "include_first", "Include First Frame", False)
+	],	# input params,
+	[],	# output params,
+	narly_sprite_complete_circular_animation	# actual function
+)
+
+# -----------------------------------------------
+# -----------------------------------------------
+# -----------------------------------------------
+
 def narly_sprite_copy_layer_to_all_frames(img, layer):
 	"""
 	Copies the current layer to all frames. If the current layer is in a
